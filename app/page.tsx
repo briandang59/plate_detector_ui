@@ -1,65 +1,182 @@
-import Image from "next/image";
+'use client';
 
-export default function Home() {
+import { useEffect, useRef, useState } from 'react';
+import { ConfigProvider, Row, Col, Alert } from 'antd';
+import { theme as antdTheme } from 'antd';
+
+import StatsCards from '@/components/StatsCards';
+import LaneCamera from '@/components/LaneCamera';
+import LastScannedCard from '@/components/LastScannedCard';
+import ControlButtons from '@/components/ControlButtons';
+import CapturedPreview from '@/components/CapturedPreview';
+import TransactionTable from '@/components/TransactionTable';
+
+import { captureFrame } from '@/utils/functions/captureFrame';
+
+export default function SmartParkingDashboard() {
+  const videoRefLeft = useRef<HTMLVideoElement | null>(null);
+  const videoRefRight = useRef<HTMLVideoElement | null>(null);
+
+  const [capturedBlob, setCapturedBlob] = useState<Blob | null>(null);
+  const [capturedUrl, setCapturedUrl] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isSending, setIsSending] = useState(false);
+
+  // Dữ liệu giả lập (sau này fetch từ API)
+  const stats = { occupancy: 87, available: 42, volume: 1204 };
+  const transactions = [
+    { key: '1', time: '14:01:22', lane: 'Entry E01', lpn: 'KBA-4921', duration: '-', status: 'Allowed' },
+    { key: '2', time: '13:58:45', lane: 'Exit X01', lpn: 'LMN-3321', duration: '2h 14m', status: 'Paid' },
+    { key: '3', time: '13:55:10', lane: 'Entry E01', lpn: 'UNK-0000', duration: '-', status: 'Manual Review' },
+  ];
+
+  useEffect(() => {
+    async function openCamera(ref: React.RefObject<HTMLVideoElement | null>) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'environment' },
+        });
+        if (ref.current) ref.current.srcObject = stream;
+      } catch (err) {
+        setError('Không mở được camera. Vui lòng kiểm tra quyền truy cập.');
+        console.error(err);
+      }
+    }
+
+    setIsLoading(true);
+    Promise.all([openCamera(videoRefLeft), openCamera(videoRefRight)]).then(() => setIsLoading(false));
+
+    return () => {
+      [videoRefLeft, videoRefRight].forEach((ref) => {
+        if (ref.current?.srcObject) {
+          (ref.current.srcObject as MediaStream).getTracks().forEach((t) => t.stop());
+        }
+      });
+    };
+  }, []);
+
+  const handleCapture = async () => {
+    const video = videoRefLeft.current ?? videoRefRight.current;
+    if (!video) return;
+
+    try {
+      const blob = await captureFrame(video);
+      setCapturedBlob(blob);
+      setCapturedUrl(URL.createObjectURL(blob));
+      video.pause();
+    } catch (err) {
+      console.error('Capture failed:', err);
+    }
+  };
+
+  const handleReset = () => {
+    [videoRefLeft.current, videoRefRight.current].forEach((v) => v?.play().catch(console.error));
+    if (capturedUrl) URL.revokeObjectURL(capturedUrl);
+    setCapturedBlob(null);
+    setCapturedUrl(null);
+  };
+
+  const handleSend = async () => {
+    if (!capturedBlob) return;
+    setIsSending(true);
+    try {
+      const formData = new FormData();
+      formData.append('image', capturedBlob, `frame-${Date.now()}.jpg`);
+      formData.append('cameraId', 'CAM-01');
+      formData.append('timestamp', new Date().toISOString());
+
+      const res = await fetch('/api/upload-parking-frame', { method: 'POST', body: formData });
+      if (!res.ok) throw new Error('Upload failed');
+      alert('Gửi thành công!');
+      handleReset();
+    } catch (err) {
+      alert('Gửi thất bại');
+      console.error(err);
+    } finally {
+      setIsSending(false);
+    }
+  };
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+    <ConfigProvider
+      theme={{
+        algorithm: antdTheme.darkAlgorithm,
+        token: { colorPrimary: '#1677ff', borderRadius: 8 },
+      }}
+    >
+      <div className="min-h-screen bg-[#0f172a] p-4 md:p-6">
+        <div className="max-w-400 mx-auto space-y-6">
+          <div>
+            <h1 className="text-2xl md:text-3xl font-bold text-white! mb-1!">
+              Smart Parking - Giám Sát Chung Cư
+            </h1>
+            <p className="text-gray-400">
+              Camera tầng B2 - Khu A | Vinhomes Central Park
+            </p>
+          </div>
+
+          <StatsCards stats={stats} />
+
+          <Row gutter={16}>
+            <Col xs={24} lg={12}>
+              <LaneCamera
+                title="Entry Lane - E01"
+                cameraId="CAM-01"
+                videoRef={videoRefLeft}
+                isLoading={isLoading}
+              />
+            </Col>
+            <Col xs={24} lg={12}>
+              <LaneCamera
+                title="Exit Lane - X01"
+                cameraId="CAM-02"
+                videoRef={videoRefRight}
+                isLoading={isLoading}
+              />
+            </Col>
+          </Row>
+
+          <Row gutter={16}>
+            <Col xs={24} lg={12}>
+              <LastScannedCard
+                side="Entry"
+                plate="KBA-4921"
+                status="Access Granted"
+                gateStatus="Open"
+                gateIcon="open"
+              />
+            </Col>
+            <Col xs={24} lg={12}>
+              <LastScannedCard
+                side="Exit"
+                plate="XYZ-9822"
+                status="Payment Pending"
+                gateStatus="Closed"
+                gateIcon="closed"
+              />
+            </Col>
+          </Row>
+
+          <ControlButtons
+            onCapture={handleCapture}
+            onReset={handleReset}
+            disabledCapture={!!capturedUrl}
+          />
+
+          {capturedUrl && (
+            <CapturedPreview
+              imageUrl={capturedUrl}
+              isSending={isSending}
+              onSend={handleSend}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+          )}
+
+          <TransactionTable data={transactions} />
+
+          {error && <Alert message={error} type="error" showIcon className="mt-6" />}
         </div>
-      </main>
-    </div>
+      </div>
+    </ConfigProvider>
   );
 }
