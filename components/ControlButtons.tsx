@@ -16,7 +16,6 @@ export default function ControlButtons({ onCapture, onReset, disabledCapture }: 
           icon={<Camera />}
           size="large"
           onClick={onCapture}
-          disabled={disabledCapture}
         >
           Manual Trigger / Capture
         </Button>

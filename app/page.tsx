@@ -23,55 +23,86 @@ export default function SmartParkingDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
 
-  // Dữ liệu giả lập (sau này fetch từ API)
-  const stats = { occupancy: 87, available: 42, volume: 1204 };
-  const transactions = [
-    { key: '1', time: '14:01:22', lane: 'Entry E01', lpn: 'KBA-4921', duration: '-', status: 'Allowed' },
-    { key: '2', time: '13:58:45', lane: 'Exit X01', lpn: 'LMN-3321', duration: '2h 14m', status: 'Paid' },
-    { key: '3', time: '13:55:10', lane: 'Entry E01', lpn: 'UNK-0000', duration: '-', status: 'Manual Review' },
-  ];
-
   useEffect(() => {
-    async function openCamera(ref: React.RefObject<HTMLVideoElement | null>) {
+    let streams: MediaStream[] = [];
+
+    async function openCameras() {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'environment' },
-        });
-        if (ref.current) ref.current.srcObject = stream;
+        setIsLoading(true);
+
+        // 1️⃣ xin quyền trước (để hiện label)
+        await navigator.mediaDevices.getUserMedia({ video: true });
+
+        // 2️⃣ lấy danh sách camera
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter(d => d.kind === 'videoinput');
+
+        console.log('Detected cameras:', videoDevices);
+
+        if (videoDevices.length === 0) {
+          throw new Error('Không tìm thấy camera');
+        }
+
+        // 3️⃣ ENTRY CAM
+        if (videoRefLeft.current && videoDevices[0]) {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: { deviceId: { exact: videoDevices[0].deviceId } },
+          });
+          videoRefLeft.current.srcObject = stream;
+          streams.push(stream);
+        }
+
+        // 4️⃣ EXIT CAM (nếu có)
+        if (videoRefRight.current && videoDevices[1]) {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: { deviceId: { exact: videoDevices[1].deviceId } },
+          });
+          videoRefRight.current.srcObject = stream;
+          streams.push(stream);
+        }
+
+        if (videoDevices.length === 1) {
+          setError('Chỉ phát hiện 1 camera – hệ thống đang chạy chế độ 1 làn');
+        }
       } catch (err) {
-        setError('Không mở được camera. Vui lòng kiểm tra quyền truy cập.');
         console.error(err);
+        setError('Không mở được camera hoặc không đủ số camera');
+      } finally {
+        setIsLoading(false);
       }
     }
 
-    setIsLoading(true);
-    Promise.all([openCamera(videoRefLeft), openCamera(videoRefRight)]).then(() => setIsLoading(false));
+    openCameras();
 
     return () => {
-      [videoRefLeft, videoRefRight].forEach((ref) => {
-        if (ref.current?.srcObject) {
-          (ref.current.srcObject as MediaStream).getTracks().forEach((t) => t.stop());
-        }
-      });
+      streams.forEach(stream =>
+        stream.getTracks().forEach(track => track.stop())
+      );
     };
   }, []);
 
+  // 📸 Capture frame (ưu tiên Entry trước)
   const handleCapture = async () => {
-    const video = videoRefLeft.current ?? videoRefRight.current;
+    const video =
+      videoRefLeft.current?.srcObject
+        ? videoRefLeft.current
+        : videoRefRight.current;
+
     if (!video) return;
 
     try {
       const blob = await captureFrame(video);
       setCapturedBlob(blob);
       setCapturedUrl(URL.createObjectURL(blob));
-      video.pause();
     } catch (err) {
       console.error('Capture failed:', err);
     }
   };
 
   const handleReset = () => {
-    [videoRefLeft.current, videoRefRight.current].forEach((v) => v?.play().catch(console.error));
+    [videoRefLeft.current, videoRefRight.current].forEach(v =>
+      v?.play().catch(console.error)
+    );
     if (capturedUrl) URL.revokeObjectURL(capturedUrl);
     setCapturedBlob(null);
     setCapturedUrl(null);
@@ -79,6 +110,7 @@ export default function SmartParkingDashboard() {
 
   const handleSend = async () => {
     if (!capturedBlob) return;
+
     setIsSending(true);
     try {
       const formData = new FormData();
@@ -86,8 +118,13 @@ export default function SmartParkingDashboard() {
       formData.append('cameraId', 'CAM-01');
       formData.append('timestamp', new Date().toISOString());
 
-      const res = await fetch('/api/upload-parking-frame', { method: 'POST', body: formData });
+      const res = await fetch('/api/upload-parking-frame', {
+        method: 'POST',
+        body: formData,
+      });
+
       if (!res.ok) throw new Error('Upload failed');
+
       alert('Gửi thành công!');
       handleReset();
     } catch (err) {
@@ -116,8 +153,6 @@ export default function SmartParkingDashboard() {
             </p>
           </div>
 
-          <StatsCards stats={stats} />
-
           <Row gutter={16}>
             <Col xs={24} lg={12}>
               <LaneCamera
@@ -127,14 +162,17 @@ export default function SmartParkingDashboard() {
                 isLoading={isLoading}
               />
             </Col>
-            <Col xs={24} lg={12}>
-              <LaneCamera
-                title="Exit Lane - X01"
-                cameraId="CAM-02"
-                videoRef={videoRefRight}
-                isLoading={isLoading}
-              />
-            </Col>
+
+            {videoRefRight && (
+              <Col xs={24} lg={12}>
+                <LaneCamera
+                  title="Exit Lane - X01"
+                  cameraId="CAM-02"
+                  videoRef={videoRefRight}
+                  isLoading={isLoading}
+                />
+              </Col>
+            )}
           </Row>
 
           <Row gutter={16}>
@@ -172,9 +210,7 @@ export default function SmartParkingDashboard() {
             />
           )}
 
-          <TransactionTable data={transactions} />
-
-          {error && <Alert message={error} type="error" showIcon className="mt-6" />}
+          {error && <Alert message={error} type="warning" showIcon />}
         </div>
       </div>
     </ConfigProvider>
