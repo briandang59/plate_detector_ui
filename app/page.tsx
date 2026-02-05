@@ -1,27 +1,30 @@
-'use client';
+"use client";
 
-import { useEffect, useRef, useState } from 'react';
-import { ConfigProvider, Row, Col, Alert } from 'antd';
-import { theme as antdTheme } from 'antd';
+import { useEffect, useRef, useState } from "react";
+import { ConfigProvider, Row, Col, Alert } from "antd";
+import { theme as antdTheme } from "antd";
 
-import StatsCards from '@/components/StatsCards';
-import LaneCamera from '@/components/LaneCamera';
-import LastScannedCard from '@/components/LastScannedCard';
-import ControlButtons from '@/components/ControlButtons';
-import CapturedPreview from '@/components/CapturedPreview';
-import TransactionTable from '@/components/TransactionTable';
+import LaneCamera from "@/components/LaneCamera";
+import LastScannedCard from "@/components/LastScannedCard";
+import ControlButtons from "@/components/ControlButtons";
+import CapturedPreview from "@/components/CapturedPreview";
 
-import { captureFrame } from '@/utils/functions/captureFrame';
+import { captureFrame } from "@/utils/functions/captureFrame";
+import { api } from "@/lib/api";
+import { DetectResponse } from "@/types/responses/detect";
+import toast from "react-hot-toast";
+import { urls } from "@/utils/constants/urls";
 
 export default function SmartParkingDashboard() {
   const videoRefLeft = useRef<HTMLVideoElement | null>(null);
   const videoRefRight = useRef<HTMLVideoElement | null>(null);
-
   const [capturedBlob, setCapturedBlob] = useState<Blob | null>(null);
   const [capturedUrl, setCapturedUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
+  const [cameraOnlineLeft, setCameraOnlineLeft] = useState(false);
+  const [plateDetect, setPlateDetect] = useState<string>("unknow");
 
   useEffect(() => {
     let streams: MediaStream[] = [];
@@ -30,43 +33,25 @@ export default function SmartParkingDashboard() {
       try {
         setIsLoading(true);
 
-        // 1️⃣ xin quyền trước (để hiện label)
-        await navigator.mediaDevices.getUserMedia({ video: true });
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+        });
 
-        // 2️⃣ lấy danh sách camera
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoDevices = devices.filter(d => d.kind === 'videoinput');
-
-        console.log('Detected cameras:', videoDevices);
-
-        if (videoDevices.length === 0) {
-          throw new Error('Không tìm thấy camera');
-        }
-
-        // 3️⃣ ENTRY CAM
-        if (videoRefLeft.current && videoDevices[0]) {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            video: { deviceId: { exact: videoDevices[0].deviceId } },
-          });
+        if (videoRefLeft.current) {
           videoRefLeft.current.srcObject = stream;
-          streams.push(stream);
-        }
 
-        // 4️⃣ EXIT CAM (nếu có)
-        if (videoRefRight.current && videoDevices[1]) {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            video: { deviceId: { exact: videoDevices[1].deviceId } },
-          });
-          videoRefRight.current.srcObject = stream;
-          streams.push(stream);
-        }
+          const track = stream.getVideoTracks()[0];
 
-        if (videoDevices.length === 1) {
-          setError('Chỉ phát hiện 1 camera – hệ thống đang chạy chế độ 1 làn');
+          setCameraOnlineLeft(true);
+
+          track.onended = () => {
+            setCameraOnlineLeft(false);
+            setError("Camera Entry bị ngắt kết nối");
+          };
         }
       } catch (err) {
-        console.error(err);
-        setError('Không mở được camera hoặc không đủ số camera');
+        setCameraOnlineLeft(false);
+        setError("Không mở được webcam");
       } finally {
         setIsLoading(false);
       }
@@ -75,18 +60,16 @@ export default function SmartParkingDashboard() {
     openCameras();
 
     return () => {
-      streams.forEach(stream =>
-        stream.getTracks().forEach(track => track.stop())
+      streams.forEach((stream) =>
+        stream.getTracks().forEach((track) => track.stop()),
       );
     };
   }, []);
 
-  // 📸 Capture frame (ưu tiên Entry trước)
   const handleCapture = async () => {
-    const video =
-      videoRefLeft.current?.srcObject
-        ? videoRefLeft.current
-        : videoRefRight.current;
+    const video = videoRefLeft.current?.srcObject
+      ? videoRefLeft.current
+      : videoRefRight.current;
 
     if (!video) return;
 
@@ -95,13 +78,13 @@ export default function SmartParkingDashboard() {
       setCapturedBlob(blob);
       setCapturedUrl(URL.createObjectURL(blob));
     } catch (err) {
-      console.error('Capture failed:', err);
+      console.error("Capture failed:", err);
     }
   };
 
   const handleReset = () => {
-    [videoRefLeft.current, videoRefRight.current].forEach(v =>
-      v?.play().catch(console.error)
+    [videoRefLeft.current, videoRefRight.current].forEach((v) =>
+      v?.play().catch(console.error),
     );
     if (capturedUrl) URL.revokeObjectURL(capturedUrl);
     setCapturedBlob(null);
@@ -112,23 +95,31 @@ export default function SmartParkingDashboard() {
     if (!capturedBlob) return;
 
     setIsSending(true);
+
     try {
       const formData = new FormData();
-      formData.append('image', capturedBlob, `frame-${Date.now()}.jpg`);
-      formData.append('cameraId', 'CAM-01');
-      formData.append('timestamp', new Date().toISOString());
+      formData.append("file", capturedBlob, `frame-${Date.now()}.jpg`);
+      formData.append("cameraId", "CAM-01");
+      formData.append("timestamp", new Date().toISOString());
 
-      const res = await fetch('/api/upload-parking-frame', {
-        method: 'POST',
-        body: formData,
-      });
+      const response = await api.upload<DetectResponse>(
+        `/${urls.detect}`,
+        formData,
+      );
 
-      if (!res.ok) throw new Error('Upload failed');
-
-      alert('Gửi thành công!');
+      if (!response.ok || response.error) {
+        throw new Error(response.error || "Upload thất bại");
+      }
+      if (response.data?.plate) {
+        setPlateDetect(response.data.plate);
+        toast.success(
+          `Phát hiện: ${response.data.plate} (độ tin cậy: ${response.data.confidence.toFixed(2)})`,
+        );
+      } else {
+        toast.error(response.data?.message || "Không phát hiện biển số");
+      }
       handleReset();
-    } catch (err) {
-      alert('Gửi thất bại');
+    } catch (err: any) {
       console.error(err);
     } finally {
       setIsSending(false);
@@ -139,19 +130,19 @@ export default function SmartParkingDashboard() {
     <ConfigProvider
       theme={{
         algorithm: antdTheme.darkAlgorithm,
-        token: { colorPrimary: '#1677ff', borderRadius: 8 },
+        token: { colorPrimary: "#1677ff", borderRadius: 8 },
       }}
     >
       <div className="min-h-screen bg-[#0f172a] p-4 md:p-6">
         <div className="max-w-400 mx-auto space-y-6">
-          <div>
+          {/* <div>
             <h1 className="text-2xl md:text-3xl font-bold text-white! mb-1!">
               Smart Parking - Giám Sát Chung Cư
             </h1>
             <p className="text-gray-400">
               Camera tầng B2 - Khu A | Vinhomes Central Park
             </p>
-          </div>
+          </div> */}
 
           <Row gutter={16}>
             <Col xs={24} lg={12}>
@@ -160,6 +151,7 @@ export default function SmartParkingDashboard() {
                 cameraId="CAM-01"
                 videoRef={videoRefLeft}
                 isLoading={isLoading}
+                online={cameraOnlineLeft}
               />
             </Col>
 
@@ -170,6 +162,7 @@ export default function SmartParkingDashboard() {
                   cameraId="CAM-02"
                   videoRef={videoRefRight}
                   isLoading={isLoading}
+                  online={!cameraOnlineLeft}
                 />
               </Col>
             )}
@@ -179,7 +172,7 @@ export default function SmartParkingDashboard() {
             <Col xs={24} lg={12}>
               <LastScannedCard
                 side="Entry"
-                plate="KBA-4921"
+                plate={plateDetect}
                 status="Access Granted"
                 gateStatus="Open"
                 gateIcon="open"

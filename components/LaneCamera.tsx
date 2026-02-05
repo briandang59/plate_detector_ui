@@ -1,13 +1,14 @@
-import { Card, Spin, Tag, Space } from 'antd';
-import { Video, CircleCheck } from 'lucide-react';
-import LiveOverlay from './LiveOverlay';
-import { useEffect, useState } from 'react';
+import { Card, Spin, Tag, Space } from "antd";
+import { Video, CircleCheck } from "lucide-react";
+import LiveOverlay from "./LiveOverlay";
+import { useEffect, useState } from "react";
 
 interface Props {
   title: string;
   cameraId: string;
   videoRef: React.RefObject<HTMLVideoElement | null>;
   isLoading: boolean;
+  online: boolean;
 }
 
 export default function LaneCamera({
@@ -15,6 +16,7 @@ export default function LaneCamera({
   cameraId,
   videoRef,
   isLoading,
+  online,
 }: Props) {
   const [time, setTime] = useState(new Date());
 
@@ -29,7 +31,10 @@ export default function LaneCamera({
     <Card
       title={
         <Space>
-          <Video size={18} /> {title} <Tag color="green">Active</Tag>
+          <Video size={18} /> {title}
+          <Tag color={online ? "green" : "red"}>
+            {online ? "Online" : "Offline"}
+          </Tag>
         </Space>
       }
       extra={
@@ -37,7 +42,7 @@ export default function LaneCamera({
           {cameraId} • {time.toLocaleTimeString()}
         </Tag>
       }
-      bodyStyle={{ padding: 0 }}
+      style={{ padding: 0 }}
     >
       <div className="relative rounded-b-lg overflow-hidden">
         {isLoading && (
@@ -47,7 +52,12 @@ export default function LaneCamera({
           />
         )}
 
-        {/* 🎥 KHUNG 16:9 CHUẨN CAMERA */}
+        {!online && !isLoading && (
+          <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-red-500 font-bold z-20">
+            CAMERA DISCONNECTED
+          </div>
+        )}
+
         <div className="relative w-full aspect-video bg-black">
           <video
             ref={videoRef}
@@ -56,7 +66,7 @@ export default function LaneCamera({
             muted
             className="absolute inset-0 w-full h-full object-cover"
           />
-          <LiveOverlay />
+          {online && <LiveOverlay />}
         </div>
       </div>
     </Card>
